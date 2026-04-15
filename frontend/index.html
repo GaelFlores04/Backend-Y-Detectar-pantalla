@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Focus Tracker</title>
+  <title>Focus Tracker NUEVO</title>
   <style>
     body { font-family: sans-serif; padding: 20px; }
     button { margin: 5px; padding: 8px 16px; cursor: pointer; }
@@ -81,7 +81,7 @@
 </head>
 <body>
 
-  <h2>Focus Tracker — Prueba funcional</h2>
+  <h2>Focus Tracker — Prueba funcional NUEVO</h2>
 
   <div>
     <button id="btn-ini" onclick="iniciarSesion()">Iniciar sesión</button>
@@ -90,7 +90,7 @@
 
   <div id="status">Sin sesión activa</div>
   <div id="screen-msg" style="color:red; display:none; margin-top:8px;">
-    ⚠ El rastreo no puede iniciar sin acceso a la pantalla. La sesión no comenzará.
+    ⚠️ El rastreo no puede iniciar sin acceso a la pantalla. La sesión no comenzará.
   </div>
 
   <div id="contador-box" style="display:none">
@@ -126,6 +126,7 @@
     let inactiveStart     = null;
     let toastAutoClose    = null;
     let toastRepeatTimer  = null;
+    let toastCerradoManualmente = false;
 
     // Contador regresivo
     let contadorInterval = null;
@@ -291,7 +292,7 @@
         inactiveStart = null;
         clearInterval(toastRepeatTimer);
         toastRepeatTimer = null;
-        cerrarToast();
+       
       }
 
       setEstadoActividad('Activo — mueve el mouse o presiona una tecla', 'green');
@@ -306,7 +307,7 @@
 
       inactiveStart = new Date();
       const ts      = formatTimestamp(inactiveStart);
-      log(`⚠ Inactividad detectada — ${ts} — umbral: ${INACTIVITY_THRESHOLD}s`);
+      log(`⚠️ Inactividad detectada — ${ts} — umbral: ${INACTIVITY_THRESHOLD}s`);
       setEstadoActividad('INACTIVO — sin movimiento ni teclado', '#d9534f');
 
       mostrarToast(INACTIVITY_THRESHOLD);
@@ -334,39 +335,48 @@
     }
 
     // ── Toast ───────────────────────────────────────────────
-    function mostrarToast(segundos) {
-      clearTimeout(toastAutoClose);
+function mostrarToast(segundos) {
+  // Cancelar el auto-cierre anterior sin cerrar el toast
+  clearTimeout(toastAutoClose);
+  toastCerradoManualmente = false;
 
-      const mins = Math.floor(segundos / 60);
-      const msg  = mins >= 1
-        ? `Llevas ${mins} minuto${mins > 1 ? 's' : ''} sin actividad`
-        : `Llevas ${segundos} segundo${segundos !== 1 ? 's' : ''} sin actividad`;
+  const mins = Math.floor(segundos / 60);
+  const msg  = mins >= 1
+    ? `Llevas ${mins} minuto${mins > 1 ? 's' : ''} sin actividad`
+    : `Llevas ${segundos} segundo${segundos !== 1 ? 's' : ''} sin actividad`;
 
-      document.getElementById('toast-msg').textContent = msg;
+  document.getElementById('toast-msg').textContent = msg;
 
-      const bar = document.getElementById('toast-progress-bar');
-      bar.style.transition = 'none';
-      bar.style.width      = '100%';
+  const bar = document.getElementById('toast-progress-bar');
+  bar.style.transition = 'none';
+  bar.style.width      = '100%';
 
-      document.getElementById('toast').style.display = 'block';
+  document.getElementById('toast').style.display = 'block';
 
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          bar.style.transition = 'width 6s linear';
-          bar.style.width      = '0%';
-        });
-      });
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      bar.style.transition = 'width 6s linear';
+      bar.style.width      = '0%';
+    });
+  });
 
-      toastAutoClose = setTimeout(cerrarToast, 6000);
+  // Auto-cierre solo si el usuario NO lo cerró manualmente
+  toastAutoClose = setTimeout(() => {
+    if (!toastCerradoManualmente) {
+      cerrarToast();
     }
+  }, 6000);
+}
+
 
     function cerrarToast() {
-      clearTimeout(toastAutoClose);
-      document.getElementById('toast').style.display = 'none';
-      const bar = document.getElementById('toast-progress-bar');
-      bar.style.transition = 'none';
-      bar.style.width      = '100%';
-    }
+  toastCerradoManualmente = true;
+  clearTimeout(toastAutoClose);
+  document.getElementById('toast').style.display = 'none';
+  const bar = document.getElementById('toast-progress-bar');
+  bar.style.transition = 'none';
+  bar.style.width      = '100%';
+}
   </script>
 </body>
 </html>
