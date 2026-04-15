@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Focus Tracker</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    button { margin: 5px; padding: 8px 16px; cursor: pointer; }
+    #status { margin: 10px 0; font-weight: bold; }
+
+    #contador-box {
+      display: inline-block;
+      margin: 10px 0;
+      padding: 12px 20px;
+      background: #f0f0f0;
+      border: 2px solid #ccc;
+      border-radius: 8px;
+      font-size: 18px;
+    }
+    #contador-num { font-size: 36px; font-weight: bold; color: #d9534f; }
+    #estado-actividad {
+      font-size: 13px;
+      margin-top: 4px;
+      color: #555;
+    }
+
+    #log {
+      border: 1px solid #ccc;
+      padding: 10px;
+      height: 200px;
+      overflow-y: auto;
+      font-size: 13px;
+      background: #f9f9f9;
+    }
+
+    #toast {
+      display: none;
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 300px;
+      background: white;
+      border: 1px solid #e0e0e0;
+      border-left: 4px solid #f0a500;
+      border-radius: 6px;
+      padding: 14px 14px 10px 14px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 9999;
+    }
+    #toast-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: bold;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    #toast-close {
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-size: 18px;
+      color: #666;
+      padding: 0;
+    }
+    #toast-close:hover { color: #000; }
+    #toast-msg { font-size: 13px; color: #444; margin-bottom: 8px; }
+    #toast-progress-track {
+      height: 4px;
+      background: #e0e0e0;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #toast-progress-bar {
+      height: 4px;
+      background: #f0a500;
+      width: 100%;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>Focus Tracker — Prueba funcional</h2>
+
+  <div>
+    <button id="btn-ini" onclick="iniciarSesion()">Iniciar sesión</button>
+    <button id="btn-fin" onclick="finalizarSesion()" disabled>Finalizar sesión</button>
+  </div>
+
+  <div id="status">Sin sesión activa</div>
+  <div id="screen-msg" style="color:red; display:none; margin-top:8px;">
+    ⚠ El rastreo no puede iniciar sin acceso a la pantalla. La sesión no comenzará.
+  </div>
+
+  <div id="contador-box" style="display:none">
+    <div>Inactividad en: <span id="contador-num">10</span>s</div>
+    <div id="estado-actividad">Esperando actividad...</div>
+  </div>
+
+  <h4>Registro de eventos</h4>
+  <div id="log"></div>
+
+  <div id="toast">
+    <div id="toast-header">
+      <span>Sin actividad detectada</span>
+      <button id="toast-close" onclick="cerrarToast()">✕</button>
+    </div>
+    <div id="toast-msg"></div>
+    <div id="toast-progress-track">
+      <div id="toast-progress-bar"></div>
+    </div>
+  </div>
+
+  <script>
+    const WS_URL  = "ws://localhost:8000/ws/activity";
+    const API_URL = "http://localhost:8000";
+    const INACTIVITY_THRESHOLD = 10;  // segundos
+    const TOAST_REPEAT_INTERVAL = 30;
+
+    let sessionId    = null;
+    let ws           = null;
+    let screenStream = null;
+    let monitorActivo = false;
+
+    let inactiveStart     = null;
+    let toastAutoClose    = null;
+    let toastRepeatTimer  = null;
+
+    // Contador regresivo
+    let contadorInterval = null;
+    let segundosRestantes = INACTIVITY_THRESHOLD;
+
+    // ── Utilidades ─────────────────────────────────────────
+    function formatTimestamp(date) {
+      const p = n => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}` +
+             `|${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
+    }
+
+    function log(msg) {
+      const div = document.getElementById('log');
+      const ts  = new Date().toLocaleTimeString();
+      div.innerHTML += `<div><b>${ts}</b> — ${msg}</div>`;
+      div.scrollTop  = div.scrollHeight;
+    }
+
+    function setStatus(msg, color = '#333') {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.style.color = color;
+    }
+
+    function setEstadoActividad(msg, color = '#555') {
+      const el = document.getElementById('estado-actividad');
+      el.textContent = msg;
+      el.style.color = color;
+    }
+
+    // ── Contador regresivo ──────────────────────────────────
+    function iniciarContador() {
+      clearInterval(contadorInterval);
+      segundosRestantes = INACTIVITY_THRESHOLD;
+      actualizarContador();
+
+      contadorInterval = setInterval(() => {
+        segundosRestantes--;
+        actualizarContador();
+        if (segundosRestantes <= 0) {
+          clearInterval(contadorInterval);
+        }
+      }, 1000);
+    }
+
+    function actualizarContador() {
+      const el = document.getElementById('contador-num');
+      el.textContent = segundosRestantes;
+      el.style.color = segundosRestantes <= 3 ? '#d9534f' : '#333';
+    }
+
+    function resetContador() {
+      clearInterval(contadorInterval);
+      segundosRestantes = INACTIVITY_THRESHOLD;
+      actualizarContador();
+      iniciarContador();
+    }
+
+    // ── Sesión ──────────────────────────────────────────────
+    async function iniciarSesion() {
+      try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        document.getElementById('screen-msg').style.display = 'none';
+        log('Permiso de pantalla concedido.');
+      } catch (e) {
+        document.getElementById('screen-msg').style.display = 'block';
+        log('Permiso denegado. Sesión no iniciada.');
+        return;
+      }
+
+      try {
+        const res  = await fetch(`${API_URL}/sessions/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: 1 })
+        });
+        const data = await res.json();
+        sessionId  = data.id;
+        log(`Sesión creada. ID: ${sessionId}`);
+      } catch (e) {
+        log('Error al crear sesión en el backend.');
+        return;
+      }
+
+      ws = new WebSocket(`${WS_URL}/${sessionId}`);
+      ws.onopen    = () => log('WebSocket conectado.');
+      ws.onmessage = e  => log(`Servidor: ${e.data}`);
+      ws.onerror   = () => log('Error en WebSocket.');
+
+      setStatus(`Sesión activa (ID: ${sessionId}) — monitoreando...`, 'green');
+      document.getElementById('btn-ini').disabled = true;
+      document.getElementById('btn-fin').disabled = false;
+      document.getElementById('contador-box').style.display = 'inline-block';
+
+      iniciarMonitor();
+    }
+
+    async function finalizarSesion() {
+      detenerMonitor();
+      cerrarToast();
+      document.getElementById('contador-box').style.display = 'none';
+
+      if (ws)           { ws.close(); ws = null; }
+      if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
+
+      if (sessionId) {
+        try {
+          await fetch(`${API_URL}/sessions/${sessionId}/end`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ productivity_score: null })
+          });
+          log(`Sesión ${sessionId} finalizada.`);
+        } catch(e) { log('Error al finalizar sesión.'); }
+        sessionId = null;
+      }
+
+      setStatus('Sin sesión activa', '#333');
+      document.getElementById('btn-ini').disabled = false;
+      document.getElementById('btn-fin').disabled = true;
+    }
+
+    // ── Monitor ─────────────────────────────────────────────
+    function iniciarMonitor() {
+      monitorActivo = true;
+      window.addEventListener('mousemove', onActividad);
+      window.addEventListener('mousedown', onActividad);
+      window.addEventListener('keydown',   onActividad);
+      window.addEventListener('scroll',    onActividad);
+      window.addEventListener('click',     onActividad);
+      window.addEventListener('touchstart',onActividad);
+
+      setEstadoActividad('Activo — mueve el mouse o presiona una tecla', 'green');
+      log(`Monitor iniciado. Umbral: ${INACTIVITY_THRESHOLD}s`);
+      iniciarContador();
+
+      // Timer principal de inactividad
+      window._inactivityTimer = setTimeout(onInactividad, INACTIVITY_THRESHOLD * 1000);
+    }
+
+    function detenerMonitor() {
+      monitorActivo = false;
+      clearTimeout(window._inactivityTimer);
+      clearInterval(contadorInterval);
+      clearTimeout(toastAutoClose);
+      clearInterval(toastRepeatTimer);
+      window.removeEventListener('mousemove', onActividad);
+      window.removeEventListener('mousedown', onActividad);
+      window.removeEventListener('keydown',   onActividad);
+      window.removeEventListener('scroll',    onActividad);
+      window.removeEventListener('click',     onActividad);
+      window.removeEventListener('touchstart',onActividad);
+    }
+
+    function onActividad() {
+      if (!monitorActivo) return;
+
+      const eraInactivo = inactiveStart !== null;
+      if (eraInactivo) {
+        const dur = Math.floor((new Date() - inactiveStart) / 1000);
+        log(`✅ Actividad retomada después de ${dur}s de inactividad`);
+        inactiveStart = null;
+        clearInterval(toastRepeatTimer);
+        toastRepeatTimer = null;
+        cerrarToast();
+      }
+
+      setEstadoActividad('Activo — mueve el mouse o presiona una tecla', 'green');
+      resetContador();
+
+      clearTimeout(window._inactivityTimer);
+      window._inactivityTimer = setTimeout(onInactividad, INACTIVITY_THRESHOLD * 1000);
+    }
+
+    function onInactividad() {
+      if (!monitorActivo) return;
+
+      inactiveStart = new Date();
+      const ts      = formatTimestamp(inactiveStart);
+      log(`⚠ Inactividad detectada — ${ts} — umbral: ${INACTIVITY_THRESHOLD}s`);
+      setEstadoActividad('INACTIVO — sin movimiento ni teclado', '#d9534f');
+
+      mostrarToast(INACTIVITY_THRESHOLD);
+      enviarEvento(ts, INACTIVITY_THRESHOLD);
+
+      clearInterval(contadorInterval);
+      document.getElementById('contador-num').textContent = '0';
+
+      toastRepeatTimer = setInterval(() => {
+        if (!monitorActivo) return;
+        const ahora = new Date();
+        const dur2  = Math.floor((ahora - inactiveStart) / 1000);
+        const ts2   = formatTimestamp(ahora);
+        log(`⚠️ Sigue inactivo — ${dur2}s — ${ts2}`);
+        mostrarToast(dur2);
+        enviarEvento(ts2, dur2);
+      }, TOAST_REPEAT_INTERVAL * 1000);
+    }
+
+    // ── WebSocket ───────────────────────────────────────────
+    function enviarEvento(timestamp, duration) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ timestamp, duration }));
+      }
+    }
+
+    // ── Toast ───────────────────────────────────────────────
+    function mostrarToast(segundos) {
+      clearTimeout(toastAutoClose);
+
+      const mins = Math.floor(segundos / 60);
+      const msg  = mins >= 1
+        ? `Llevas ${mins} minuto${mins > 1 ? 's' : ''} sin actividad`
+        : `Llevas ${segundos} segundo${segundos !== 1 ? 's' : ''} sin actividad`;
+
+      document.getElementById('toast-msg').textContent = msg;
+
+      const bar = document.getElementById('toast-progress-bar');
+      bar.style.transition = 'none';
+      bar.style.width      = '100%';
+
+      document.getElementById('toast').style.display = 'block';
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          bar.style.transition = 'width 6s linear';
+          bar.style.width      = '0%';
+        });
+      });
+
+      toastAutoClose = setTimeout(cerrarToast, 6000);
+    }
+
+    function cerrarToast() {
+      clearTimeout(toastAutoClose);
+      document.getElementById('toast').style.display = 'none';
+      const bar = document.getElementById('toast-progress-bar');
+      bar.style.transition = 'none';
+      bar.style.width      = '100%';
+    }
+  </script>
+</body>
+</html>
